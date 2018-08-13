@@ -1,9 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using System.IO;
+using TwitchLib.Api;
 using TwitchLib.Client;
 using TwitchLib.Client.Models;
 using System.Reflection;
@@ -16,21 +15,30 @@ namespace TwitchLurkerBot {
         private static string blacklist, channels, giftsubs;
         private static ManualResetEvent OnConnectedEvent = new ManualResetEvent(false);
         private static List<TwitchClient> clients;
+        private static TwitchAPI api;
         private static readonly string self = "llllllloyde_";
+        private static readonly string oauth = "";
+        private static readonly string client_id = "";
 
 
         static void Main(string[] args) {
+            //setup the api
+            api = new TwitchAPI();
+            api.Settings.ClientId = client_id;
+            api.Settings.AccessToken = oauth;
+
+            //setup the client
             TwitchClient currentClient = new TwitchClient();
-            ConnectionCredentials creds = new ConnectionCredentials("llllllloyde_", "Kappa");
+            ConnectionCredentials creds = new ConnectionCredentials(self, oauth);
             clients = new List<TwitchClient>();
             initializeFiles();
+            cleanChannelsFile();
             initializeEvents(currentClient);
             currentClient.Initialize(creds);
             currentClient.Connect();
             OnConnectedEvent.WaitOne();
             clients.Add(currentClient);
             int fileCleanCounter = 5;
-            int joinQueueCounter = 0;
             while (true) {
                 waitForFile(channels);
                 string[] channelList = File.ReadAllLines(channels);
@@ -49,47 +57,52 @@ namespace TwitchLurkerBot {
                 }
 
                 //join any channel thats only in the channellist with rudimentary error catching lul
+                int joinQueueCounter = 0;
                 foreach (string channel in channelList) {
-                    if (!isInBlacklist(channel) && checkIfChannel(channel) && !checkIfAlreadyJoined(channel, getAllJoinedChannels()) && joinQueueCounter < 50) {
+                    // create a new client if connection limit is hit
+                    if (joinQueueCounter >= 50) {
+                        Console.WriteLine("Connection limit for current client hit, creating new client");
+                        currentClient = new TwitchClient();
+                        initializeEvents(currentClient);
+                        currentClient.Initialize(creds);
+                        currentClient.Connect();
+                        OnConnectedEvent.WaitOne();
+                        clients.Add(currentClient);
+                        joinQueueCounter = 0;
+                    }
+                    if (!isInBlacklist(channel) && checkIfChannel(channel) && !checkIfAlreadyJoined(channel, getAllJoinedChannels())) {
                         currentClient.JoinChannel(channel);
                         ++joinQueueCounter;
                         Console.WriteLine($"Join channel {channel}");
                     }
                 }
-                joinQueueCounter = 0;
 
                 //check every 15 seconds
                 Console.WriteLine($"total channels at this time: {getAllJoinedChannels().Count}");
                 Console.WriteLine($"total clients at this time: {clients.Count}");
                 if (fileCleanCounter > 0)
                     Console.WriteLine($"Cleaning channels file in {fileCleanCounter} loops.");
+
+                //clean channels file
                 if (fileCleanCounter == 0) {
-                    Console.WriteLine("cleaning channels file");
-                    int count = cleanChannelsFile();
-                    if (count > 0)
-                        Console.WriteLine($"removed {count} duplicates channel from the channels file");
-                    else
-                        Console.WriteLine("no duplicate lines found");
+                    cleanChannelsFile();
                     fileCleanCounter = 5;
                 }
                 --fileCleanCounter;
-
-
                 Thread.Sleep(30000);  // waiting 30s
-
-
-                // create a new client if connection limit is hit
-                if (currentClient.JoinedChannels.Count >= 50) {
-                    Console.WriteLine("Connection limit for current client hit, creating new client");
-                    currentClient = new TwitchClient();
-                    initializeEvents(currentClient);
-                    currentClient.Initialize(creds);
-                    currentClient.Connect();
-                    OnConnectedEvent.WaitOne();
-                    clients.Add(currentClient);
-                    Thread.Sleep(5000);  // waiting 5s
-                }
+                
             }
+        }
+
+
+
+        private static void cleanChannelsFile() {
+            Console.WriteLine("cleaning channels file");
+            int count = docleanChannelsFile();
+            if (count > 0)
+                Console.WriteLine($"removed {count} duplicates channel from the channels file");
+            else
+                Console.WriteLine("no duplicate lines found");
         }
 
         private static List<JoinedChannel> getAllJoinedChannels() {
@@ -117,7 +130,7 @@ namespace TwitchLurkerBot {
             return dummy;
         }
 
-        private static int cleanChannelsFile() {
+        private static int docleanChannelsFile() {
             int oldLinesCount = 0, newLinesCount = 0;
             lock (channels) {
                 waitForFile(channels);
@@ -176,7 +189,6 @@ namespace TwitchLurkerBot {
             return isMatch;
         }
 
-
         private static bool checkIfAlreadyJoined(string channel, IReadOnlyList<JoinedChannel> joinedChannels) {
             List<string> list = new List<string>();
             foreach (JoinedChannel joinedChannel in joinedChannels) {
@@ -200,6 +212,7 @@ namespace TwitchLurkerBot {
 
         private static void Client_OnConnected(object sender, OnConnectedArgs e) {
             OnConnectedEvent.Set();
+            OnConnectedEvent.Reset();
         }
 
         private static void Client_OnMessageReceived(object sender, OnMessageReceivedArgs e) {
@@ -255,6 +268,7 @@ namespace TwitchLurkerBot {
             Console.WriteLine($"using blacklist path: {blacklist}");
             Console.WriteLine($"using giftsubs path: {giftsubs}");
         }
+
         static bool ContainsOnly(string stringToCheck, char[] contains) {
             for (int i = 0; i < stringToCheck.Length; i++) {
                 if (!contains.Contains(stringToCheck.ToCharArray()[i])) 
@@ -273,7 +287,6 @@ namespace TwitchLurkerBot {
             d = toCheck.Length <= 25;
             return (a && b && c && d);
         }
-
 
         public static bool isFileReady(string filename) {
             try {
