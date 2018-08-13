@@ -119,6 +119,7 @@ namespace TwitchLurkerBot {
                     cleanChannelsFile();
                     activeSearchCounter = 50;
                 }
+                --activeSearchCounter;
 
                 //do GC
                 if(activeSearchCounter == 0) {
