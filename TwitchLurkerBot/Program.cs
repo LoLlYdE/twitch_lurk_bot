@@ -310,9 +310,13 @@ namespace TwitchLurkerBot {
 
         private static void Client_OnFailureToReceiveJoinConfirmation(object sender, OnFailureToReceiveJoinConfirmationArgs e) {
             Console.WriteLine($"Failed to connect to {e.Exception.Channel}, adding it to blacklist");
+            addToBlacklist(e.Exception.Channel);
+        }
+
+        private static void addToBlacklist(string channel) {
             lock (blacklist) {
                 waitForFile(blacklist);
-                File.AppendAllLines(blacklist, new string[] { e.Exception.Channel });
+                File.AppendAllLines(blacklist, new string[] { channel.ToLower() });
             }
         }
 
@@ -325,6 +329,12 @@ namespace TwitchLurkerBot {
             foreach (var item in e.ChatMessage.Badges) {
                 if (item.Key.ToLower().Equals("partner"))
                     addChannel(e.ChatMessage.Username.ToLower());
+            }
+            if (e.ChatMessage.Message.ToLower().Contains(self.ToLower())) {
+                string channel = e.ChatMessage.Channel, user = e.ChatMessage.Username;
+                Console.WriteLine($"Got mentioned in {channel} by {user}. Adding both to blacklist");
+                addToBlacklist(channel);
+                addToBlacklist(user);
             }
         }
 
