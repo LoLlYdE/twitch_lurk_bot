@@ -15,17 +15,20 @@ namespace TwitchLurkerBot {
 
         private static string blacklist, channels, giftsubs;
         private static ManualResetEvent OnConnectedEvent = new ManualResetEvent(false);
+        private static List<TwitchClient> clients;
         private static readonly string self = "llllllloyde_";
 
 
         static void Main(string[] args) {
-            TwitchClient client = new TwitchClient();
+            TwitchClient currentClient = new TwitchClient();
             ConnectionCredentials creds = new ConnectionCredentials("llllllloyde_", "Kappa");
+            clients = new List<TwitchClient>();
             initializeFiles();
-            initializeEvents(client);
-            client.Initialize(creds);
-            client.Connect();
+            initializeEvents(currentClient);
+            currentClient.Initialize(creds);
+            currentClient.Connect();
             OnConnectedEvent.WaitOne();
+            clients.Add(currentClient);
             int fileCleanCounter = 5;
             int joinQueueCounter = 0;
             while (true) {
@@ -38,17 +41,17 @@ namespace TwitchLurkerBot {
                 }
 
                 //part from lists not in channel list or in blacklist
-                foreach (JoinedChannel channel in client.JoinedChannels) {
+                foreach (JoinedChannel channel in getAllJoinedChannels()) {
                     if (!isInChannelList(channel.Channel.ToLower()) || isInBlacklist(channel.Channel.ToLower())) {
-                        client.LeaveChannel(channel);
+                        findClientConnectedTo(channel.Channel.ToLower()).LeaveChannel(channel);
                         Console.WriteLine($"Part from channel {channel.Channel}");
                     }
                 }
 
                 //join any channel thats only in the channellist with rudimentary error catching lul
                 foreach (string channel in channelList) {
-                    if (!isInBlacklist(channel) && checkIfChannel(channel) && !checkIfAlreadyJoined(channel, client.JoinedChannels) && joinQueueCounter <= 50) {
-                        client.JoinChannel(channel);
+                    if (!isInBlacklist(channel) && checkIfChannel(channel) && !checkIfAlreadyJoined(channel, getAllJoinedChannels()) && joinQueueCounter < 50) {
+                        currentClient.JoinChannel(channel);
                         ++joinQueueCounter;
                         Console.WriteLine($"Join channel {channel}");
                     }
@@ -56,7 +59,8 @@ namespace TwitchLurkerBot {
                 joinQueueCounter = 0;
 
                 //check every 15 seconds
-                Console.WriteLine($"total channels at this time: {client.JoinedChannels.Count}");
+                Console.WriteLine($"total channels at this time: {getAllJoinedChannels().Count}");
+                Console.WriteLine($"total clients at this time: {clients.Count}");
                 if (fileCleanCounter > 0)
                     Console.WriteLine($"Cleaning channels file in {fileCleanCounter} loops.");
                 if (fileCleanCounter == 0) {
@@ -69,8 +73,48 @@ namespace TwitchLurkerBot {
                     fileCleanCounter = 5;
                 }
                 --fileCleanCounter;
-                Thread.Sleep(30000);
+
+
+                Thread.Sleep(30000);  // waiting 30s
+
+
+                // create a new client if connection limit is hit
+                if (currentClient.JoinedChannels.Count >= 50) {
+                    Console.WriteLine("Connection limit for current client hit, creating new client");
+                    currentClient = new TwitchClient();
+                    initializeEvents(currentClient);
+                    currentClient.Initialize(creds);
+                    currentClient.Connect();
+                    OnConnectedEvent.WaitOne();
+                    clients.Add(currentClient);
+                    Thread.Sleep(5000);  // waiting 5s
+                }
             }
+        }
+
+        private static List<JoinedChannel> getAllJoinedChannels() {
+            List<JoinedChannel> list = new List<JoinedChannel>();
+            foreach (TwitchClient client in clients) {
+                list = list.Concat(client.JoinedChannels).ToList();
+            }
+            return list;
+        }
+
+        private static TwitchClient findClientConnectedTo(string channel) {
+            TwitchClient dummy = clients[0];
+            channel = channel.ToLower();
+            foreach (TwitchClient client in clients) {
+                bool found = false;
+                foreach (JoinedChannel toCheck in client.JoinedChannels) {
+                    if (toCheck.Channel.ToLower().Equals(channel)) {
+                        found = true;
+                    }
+                }
+                if (found) {
+                    return client;
+                }
+            }
+            return dummy;
         }
 
         private static int cleanChannelsFile() {
@@ -154,11 +198,11 @@ namespace TwitchLurkerBot {
             File.AppendAllLines(blacklist, new string[] { e.Exception.Channel });
         }
 
-        private static void Client_OnConnected(object sender, TwitchLib.Client.Events.OnConnectedArgs e) {
+        private static void Client_OnConnected(object sender, OnConnectedArgs e) {
             OnConnectedEvent.Set();
         }
 
-        private static void Client_OnMessageReceived(object sender, TwitchLib.Client.Events.OnMessageReceivedArgs e) {
+        private static void Client_OnMessageReceived(object sender, OnMessageReceivedArgs e) {
             foreach (var item in e.ChatMessage.Badges) {
                 if (item.Key.ToLower().Equals("partner"))
                     addChannel(e.ChatMessage.Username.ToLower());
@@ -181,7 +225,7 @@ namespace TwitchLurkerBot {
             }
         }
 
-        private static void Client_OnGiftedSubscription(object sender, TwitchLib.Client.Events.OnGiftedSubscriptionArgs e) {
+        private static void Client_OnGiftedSubscription(object sender, OnGiftedSubscriptionArgs e) {
             if (!e.GiftedSubscription.MsgParamRecipientDisplayName.ToLower().Equals(self))
                 return;
             string toWrite = $"Got a {e.GiftedSubscription.MsgParamSubPlan} {e.GiftedSubscription.MsgParamMonths} Month sub in channel {e.Channel} by {e.GiftedSubscription.DisplayName}";
