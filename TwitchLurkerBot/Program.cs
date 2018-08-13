@@ -8,6 +8,9 @@ using TwitchLib.Client.Models;
 using System.Reflection;
 using System.Threading;
 using TwitchLib.Client.Events;
+using TwitchLib.Api.Models.Helix.Streams.GetStreams;
+using TwitchLib.Api.Models.Helix.Users.GetUsers;
+using System.Threading.Tasks;
 
 namespace TwitchLurkerBot {
     class Program {
@@ -19,6 +22,7 @@ namespace TwitchLurkerBot {
         private static readonly string self = "llllllloyde_";
         private static readonly string oauth = "";
         private static readonly string client_id = "";
+        private static readonly int limit = 700;
 
 
         static void Main(string[] args) {
@@ -32,13 +36,21 @@ namespace TwitchLurkerBot {
             ConnectionCredentials creds = new ConnectionCredentials(self, oauth);
             clients = new List<TwitchClient>();
             initializeFiles();
-            cleanChannelsFile();
             initializeEvents(currentClient);
             currentClient.Initialize(creds);
             currentClient.Connect();
             OnConnectedEvent.WaitOne();
+            OnConnectedEvent.Reset();
             clients.Add(currentClient);
             int fileCleanCounter = 5;
+            int activeSearchCounter = 50;
+
+            //Get channels actively initially
+            Console.WriteLine("Initialize by adding channels actively...");
+            addChannelsActively();
+            cleanChannelsFile();
+
+
             while (true) {
                 waitForFile(channels);
                 string[] channelList = File.ReadAllLines(channels);
@@ -58,30 +70,41 @@ namespace TwitchLurkerBot {
 
                 //join any channel thats only in the channellist with rudimentary error catching lul
                 int joinQueueCounter = 0;
+                int joinedcounter = 0;
                 foreach (string channel in channelList) {
                     // create a new client if connection limit is hit
                     if (joinQueueCounter >= 50) {
+                        Console.WriteLine($"connected to {joinedcounter} channels this loop in total");
                         Console.WriteLine("Connection limit for current client hit, creating new client");
                         currentClient = new TwitchClient();
                         initializeEvents(currentClient);
                         currentClient.Initialize(creds);
                         currentClient.Connect();
+                        Console.WriteLine("waiting for client to connect");
                         OnConnectedEvent.WaitOne();
+                        OnConnectedEvent.Reset();
+                        Console.WriteLine("Confirmation recieved");
                         clients.Add(currentClient);
                         joinQueueCounter = 0;
                     }
                     if (!isInBlacklist(channel) && checkIfChannel(channel) && !checkIfAlreadyJoined(channel, getAllJoinedChannels())) {
                         currentClient.JoinChannel(channel);
                         ++joinQueueCounter;
+                        ++joinedcounter;
                         Console.WriteLine($"Join channel {channel}");
+                        Thread.Sleep(30);
                     }
                 }
 
-                //check every 15 seconds
+                Console.WriteLine("done joining channels");
+
+                //do prints.
                 Console.WriteLine($"total channels at this time: {getAllJoinedChannels().Count}");
                 Console.WriteLine($"total clients at this time: {clients.Count}");
                 if (fileCleanCounter > 0)
                     Console.WriteLine($"Cleaning channels file in {fileCleanCounter} loops.");
+                if (activeSearchCounter > 0)
+                    Console.WriteLine($"doing active search in {activeSearchCounter} loops.");
 
                 //clean channels file
                 if (fileCleanCounter == 0) {
@@ -89,12 +112,87 @@ namespace TwitchLurkerBot {
                     fileCleanCounter = 5;
                 }
                 --fileCleanCounter;
-                Thread.Sleep(30000);  // waiting 30s
+
+                //do an active search
+                if (activeSearchCounter == 0) {
+                    addChannelsActively();
+                    cleanChannelsFile();
+                    activeSearchCounter = 50;
+                }
+
+                //do GC
+                if(activeSearchCounter == 0) {
+                    GC.Collect();
+                    GC.WaitForFullGCComplete();
+                    GC.Collect();
+                }
+
+                Thread.Sleep(15000);  // waiting 15s
                 
             }
         }
 
+        private static void addChannelsActively() {
+            List<TwitchLib.Api.Models.Helix.Streams.GetStreams.Stream> list = getTopChannels();
+            List<string> listToAdd = new List<string>();
+            List<string> listToQuery = new List<string>();
+            Console.WriteLine($"found {list.Count()} channels to add");
+            int counter = 99;
+            foreach (var item in list) {
+                if (counter != 0) {
+                    listToQuery.Add(item.UserId);
+                }
+                else {
+                    counter = 99;
+                    listToAdd = listToAdd.Concat(getNamesFromIDs(listToQuery)).ToList();
+                    listToQuery.RemoveRange(0, listToQuery.Count);
+                }
+                --counter;
+            }
 
+            foreach (string item in listToAdd) {
+                addChannel(item);
+            }
+        }
+
+        private static List<string> getNamesFromIDs(List<string> userIds) {
+            Task<GetUsersResponse> resp = api.Users.helix.GetUsersAsync(ids: userIds);
+            resp.Wait();
+            List<string> toReturn = new List<string>();
+            foreach (User item in resp.Result.Users) {
+                toReturn.Add(item.Login);
+            }
+            return toReturn;
+        }
+
+        private static List<TwitchLib.Api.Models.Helix.Streams.GetStreams.Stream> getTopChannels() {
+            List<TwitchLib.Api.Models.Helix.Streams.GetStreams.Stream> list = new List<TwitchLib.Api.Models.Helix.Streams.GetStreams.Stream>();
+            bool done = false;
+            string next = "";
+            while (!done) {
+                GetStreamsResponse resp = FetchChannels(next);
+                List<TwitchLib.Api.Models.Helix.Streams.GetStreams.Stream> toAdd = resp.Streams.ToList();
+                list = list.Concat(toAdd).ToList();
+                done = toAdd.Last().ViewerCount < 100;
+                next = resp.Pagination.Cursor;
+                Thread.Sleep(limit);
+            }
+
+            return list;
+        }
+
+        private static GetStreamsResponse FetchChannels(string next) {
+            if(next.Length < 1) {
+                Task<GetStreamsResponse> task = api.Streams.helix.GetStreamsAsync(first: 100);
+                task.Wait();
+                return task.Result;
+            }
+            else {
+                Task<GetStreamsResponse> task = api.Streams.helix.GetStreamsAsync(first: 100, after: next);
+                task.Wait();
+                return task.Result;
+            }
+        }
 
         private static void cleanChannelsFile() {
             Console.WriteLine("cleaning channels file");
@@ -202,17 +300,24 @@ namespace TwitchLurkerBot {
             client.OnMessageReceived += Client_OnMessageReceived;
             client.OnConnected += Client_OnConnected;
             client.OnFailureToReceiveJoinConfirmation += Client_OnFailureToReceiveJoinConfirmation;
+            client.OnConnectionError += Client_OnConnectionError;
+        }
+
+        private static void Client_OnConnectionError(object sender, OnConnectionErrorArgs e) {
+            Console.WriteLine(e.Error.Exception);
         }
 
         private static void Client_OnFailureToReceiveJoinConfirmation(object sender, OnFailureToReceiveJoinConfirmationArgs e) {
             Console.WriteLine($"Failed to connect to {e.Exception.Channel}, adding it to blacklist");
-            waitForFile(blacklist);
-            File.AppendAllLines(blacklist, new string[] { e.Exception.Channel });
+            lock (blacklist) {
+                waitForFile(blacklist);
+                File.AppendAllLines(blacklist, new string[] { e.Exception.Channel });
+            }
         }
 
         private static void Client_OnConnected(object sender, OnConnectedArgs e) {
+            Console.WriteLine("client connected.");
             OnConnectedEvent.Set();
-            OnConnectedEvent.Reset();
         }
 
         private static void Client_OnMessageReceived(object sender, OnMessageReceivedArgs e) {
