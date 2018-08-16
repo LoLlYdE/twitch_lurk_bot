@@ -66,7 +66,7 @@ namespace TwitchLurkerBot {
             string title = "TwitchLurkerBot";
             int padding = (width - title.Length) / 2;
             string line = getNTimesX(padding, '-') + title + getNTimesX(padding, '-');
-            if (width % 2 != 0)
+            if (width % 2 == 0)
                 line = line + "-";
             return line;
         }
