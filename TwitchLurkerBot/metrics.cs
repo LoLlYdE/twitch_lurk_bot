@@ -19,6 +19,7 @@ namespace TwitchLurkerBot {
                 Program.joinChannel_async(channel);
                 if (count % 100 == 0)
                     Console.WriteLine($"Joined {count} channels");
+                count++;
             }
 
         }
