@@ -126,12 +126,7 @@ namespace TwitchLurkerBot {
             tier = int.Parse(set[2]);
             month = int.Parse(set[3]);
             money = float.Parse(set[4]);
-            long _tier, _month, _money;
-            long.TryParse(tier.ToString(), out _tier);
-            long.TryParse(month.ToString(), out _month);
-            long.TryParse(money.ToString(), out _money);
-            return new subgift(gifter.ToString(), channel.ToString(), (int)_tier, (int)_month, _money);
-
+            return new subgift(gifter.ToString(), channel.ToString(), tier, month, money);
         }
 
         private static void addMoney(float amount) {
